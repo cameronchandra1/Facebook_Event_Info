@@ -5,9 +5,10 @@ import requests
 import urllib3
 import facebook
 import Authentication
-from darksky import forecast
-from datetime import datetime as dt
 import contextlib2
+import forecastio
+import datetime
+
 
 # uprint definition
 import sys
@@ -19,8 +20,8 @@ def uprint(*objects, sep=' ', end='\n', file=sys.stdout):
         f = lambda obj: str(obj).encode(enc, errors='backslashreplace').decode(enc)
         print(*map(f, objects), sep=sep, end=end, file=file)
 
-# Caching setup 
-CACHE_FNAME = "206_Project4_cache.json"
+# Caching setup (2 caches, one fore Facebook one for Dark Sky)
+CACHE_FNAME = "Facebook_cache.json"
 try:
     cache_file = open(CACHE_FNAME, 'r') 
     cache_contents = cache_file.read() 
@@ -29,15 +30,27 @@ try:
 except:
 	CACHE_DICTION ={}
 
+C_FNAME = "DS_cache.json"
+try:
+    c_file = open(C_FNAME, 'r') 
+    c_contents = c_file.read() 
+    C_DICTION = json.loads(c_contents) 
+    c_file.close() 
+except:
+	C_DICTION ={}
+
 ########################## DATABASE #################################
 connection = sqlite3.connect("206_Project4.sqlite")
 cur = connection.cursor()
 # FB Table 
 cur.execute("DROP TABLE IF EXISTS Facebook")
 cur.execute(''' 
-CREATE TABLE Facebook (name TEXT , place TEXT, start_time TIMESTAMP, id INTEGER)''')
+CREATE TABLE Facebook (name TEXT, latitude INTEGER, longitude INTEGER, start_time TIMESTAMP, id INTEGER)''')
 
-
+# Dark Sky Table
+cur.execute("DROP TABLE IF EXISTS DS")
+cur.execute('''
+CREATE TABLE DS (name TEXT, conditions TEXT, time_of_conditions TEXT, lat_long INTEGER, temperature INTEGER, precipProbability INTEGER)''')
 
 
 
@@ -64,23 +77,92 @@ def get_fb_data(token):
 		fw.close()
 		return CACHE_DICTION[token] 
 
-		# 	uprint(event['place'])
-		# 	uprint(event['start_time'])
+
 fb_data = get_fb_data(token)
-uprint(fb_data)
 
 # Write cached data to database 
-# for event in fb_data:
-# 	try:
-# 		for event_location in event['place']:
-# 			event_tup = event['']
+for event in fb_data:
+	if "place" in event.keys():
+		if 'location' in event['place'].keys():
+			info_tup = event['name'], event['place']['location']['latitude'], event['place']['location']['longitude'], event['start_time'], event['id']
+			cur.execute(''' INSERT INTO Facebook (name, latitude, longitude, start_time, id)
+ 			VALUES (?,?,?,?,?)''', info_tup)
 
 
-
-
-
+connection.commit() 
 
 # Dark Sky Historic Weather API
-# key = Authentication.ds_secret_key
-# boston = forecast(key, 42.3601,-71.0589)
-# boston.
+key = Authentication.ds_secret_key
+
+
+# Retrieve event times from Facebook table
+time_lst = []
+
+cur.execute('SELECT start_time FROM Facebook')
+time_data = cur.fetchall()
+for time in time_data:
+	a_time = time[0].replace('T',"")
+	b_time = a_time.replace(':','')
+	c_time = b_time.replace('-','')
+	d_time = c_time.strip()
+	time_lst.append(((int(d_time[:4])),(int(d_time[4:6])),(int(d_time[6:8])),(int(d_time[8:10])),(int(d_time[10:12]))))
+
+# Retrieve event latitude and longitude from Facebook table
+cur.execute('SELECT latitude,longitude FROM Facebook')
+lat_long = cur.fetchall()
+# Make a dictionary of required info 
+info_dict = dict(zip(time_lst,lat_long))
+
+# Function that returns forecast data from cache or Dark Sky API
+def get_ds_data(date):
+	if str(date) in C_DICTION.keys():
+		uprint("Using Cache")
+		uprint("$$$$$")
+		return C_DICTION[str(date)]
+	else:
+		uprint('Retrieving data from Dark Sky')
+		lat = info_dict[date][0]
+		longitude = info_dict[date][-1]
+		year = date[0]
+		month = date[1]
+		day = date[2]
+		hour = date[3]
+		second = date[4]
+		current_time = datetime.datetime(year, month, day, hour, second)
+		forecast = forecastio.load_forecast(key,lat,longitude,time= current_time)
+		c_forecast = forecast.currently()
+		C_DICTION[str(date)] = str(info_dict[date]),str(c_forecast.summary),str(c_forecast.time),str(c_forecast.temperature),str(c_forecast.precipProbability)
+		dumped_json_cache = json.dumps(C_DICTION) + '\n'
+		fw = open(C_FNAME,'w')
+		fw.write(dumped_json_cache)
+		fw.close()
+		return C_DICTION[str(date)]
+
+# Retrieve info and write to cache
+ds_data = []
+for date in info_dict:
+	ds_data.append(get_ds_data(date))
+
+
+
+# Write forecast data to database (DS) => adding names column in Facebook table to DS table
+for forecast in ds_data:
+	forecast_tup = forecast[1], forecast[2], forecast[0], forecast[3], forecast[4]
+	cur.execute('INSERT INTO DS (conditions, time_of_conditions, lat_long, temperature, precipProbability) VALUES (?,?,?,?,?)', forecast_tup)
+
+
+
+
+source_table = 'Facebook'
+target_table = 'DS'
+
+cur.execute("SELECT name FROM %s" % source_table)
+data = cur.fetchall()
+
+for event in data:
+	for info in event:
+		cur.execute('INSERT INTO DS (name) VALUES (%s)', info)
+
+
+
+connection.commit()
