@@ -8,6 +8,7 @@ import Authentication
 import contextlib2
 import forecastio
 import datetime
+import webbrowser
 
 
 # uprint definition
@@ -50,7 +51,7 @@ CREATE TABLE Facebook (name TEXT, latitude INTEGER, longitude INTEGER, start_tim
 # Dark Sky Table
 cur.execute("DROP TABLE IF EXISTS DS")
 cur.execute('''
-CREATE TABLE DS (name TEXT, conditions TEXT, time_of_conditions TEXT, lat_long INTEGER, temperature INTEGER, precipProbability INTEGER)''')
+CREATE TABLE DS (conditions TEXT, time_of_conditions TEXT, lat_long INTEGER, temperature INTEGER, precipProbability INTEGER)''')
 
 
 
@@ -144,25 +145,41 @@ for date in info_dict:
 	ds_data.append(get_ds_data(date))
 
 
+# Write forecast data to database (DS) 
 
-# Write forecast data to database (DS) => adding names column in Facebook table to DS table
 for forecast in ds_data:
 	forecast_tup = forecast[1], forecast[2], forecast[0], forecast[3], forecast[4]
 	cur.execute('INSERT INTO DS (conditions, time_of_conditions, lat_long, temperature, precipProbability) VALUES (?,?,?,?,?)', forecast_tup)
 
 
+cur.execute("SELECT name FROM Facebook")
+event_names = cur.fetchall()
 
-
-source_table = 'Facebook'
-target_table = 'DS'
-
-cur.execute("SELECT name FROM %s" % source_table)
-data = cur.fetchall()
-
-for event in data:
-	for info in event:
-		cur.execute('INSERT INTO DS (name) VALUES (%s)', info)
-
-
+# for name in event_names:
+# 	cur.execute('UPDATE DS (name) VALUES (?,?,?,?,?,?,?)', name)
 
 connection.commit()
+
+
+# Google Map API + visualization
+
+
+# Get lat/long from Facebook table 
+cur.execute('SELECT latitude,longitude FROM Facebook')
+coordinates = cur.fetchall() 
+cur.close()
+
+# Define marker locations and specifications 
+markers_str = ''
+for coordinate in coordinates:
+	str_coordinate = ''
+	for x in coordinate:
+		str_coordinate = str_coordinate + ',' + str(x)
+	markers_str = markers_str + "&markers=color:blue%7C{}&markers=size:tiny&".format(str_coordinate[1:])
+
+# URL Setup
+g_key = Authentication.gm_key
+url = 'https://maps.googleapis.com/maps/api/staticmap?size=480x480&format=PNG&maptype=roadmap&markers=%s&key=%s' % (markers_str, g_key)
+
+# Open static map in browser
+webbrowser.open(url)
